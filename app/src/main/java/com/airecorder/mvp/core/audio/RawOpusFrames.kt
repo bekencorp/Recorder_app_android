@@ -28,38 +28,51 @@ object RawOpusFrames {
 
     fun validate(input: InputStream): Validation {
         val source = input.buffered()
-        source.mark(4)
-        val signature = ByteArray(4)
-        val signatureBytes = source.read(signature)
-        source.reset()
-        require(!(signatureBytes == 4 && signature.contentEquals(OGG_SIGNATURE))) {
-            "Recorder file is Ogg Opus, but this recorder profile requires raw framed Opus"
-        }
+        rejectOggContainer(source)
         var frames = 0
         var payloadBytes = 0L
         var offset = 0L
         while (true) {
-            val frameOffset = offset
-            val length = source.read()
-            if (length == -1) break
-            offset += 1
-            require(length in MIN_PAYLOAD_BYTES..MAX_PAYLOAD_BYTES) {
-                "Invalid Opus frame length $length at byte $frameOffset after $frames complete frame(s)"
-            }
-            var remaining = length
-            while (remaining > 0) {
-                val read = source.read(ByteArray(minOf(remaining, 4096)))
-                require(read != -1) {
-                    "Truncated Opus frame at byte $frameOffset with $remaining payload byte(s) missing"
-                }
-                remaining -= read
-                offset += read
-            }
+            val frame = nextFrame(source, frames, offset) ?: break
             frames += 1
-            payloadBytes += length
+            payloadBytes += frame.payload.size
+            offset = frame.nextOffset
         }
         require(frames > 0) { "Recording contains no Opus frames" }
         return Validation(frames, payloadBytes)
+    }
+
+    internal fun rejectOggContainer(source: InputStream) {
+        if (!source.markSupported()) return
+        source.mark(OGG_SIGNATURE.size)
+        val signature = ByteArray(OGG_SIGNATURE.size)
+        val signatureBytes = source.read(signature)
+        source.reset()
+        require(!(signatureBytes == OGG_SIGNATURE.size && signature.contentEquals(OGG_SIGNATURE))) {
+            "Recorder file is Ogg Opus, but this recorder profile requires raw framed Opus"
+        }
+    }
+
+    /** Returns the next length-prefixed payload, or null at a clean end of stream. */
+    internal fun nextFrame(source: InputStream, framesSoFar: Int, offset: Long): OpusFrame? {
+        val frameOffset = offset
+        val length = source.read()
+        if (length == -1) return null
+        var nextOffset = offset + 1
+        require(length in MIN_PAYLOAD_BYTES..MAX_PAYLOAD_BYTES) {
+            "Invalid Opus frame length $length at byte $frameOffset after $framesSoFar complete frame(s)"
+        }
+        val payload = ByteArray(length)
+        var filled = 0
+        while (filled < payload.size) {
+            val read = source.read(payload, filled, payload.size - filled)
+            require(read != -1) {
+                "Truncated Opus frame at byte $frameOffset with ${payload.size - filled} payload byte(s) missing"
+            }
+            filled += read
+            nextOffset += read
+        }
+        return OpusFrame(payload, nextOffset)
     }
 
     /**
@@ -117,11 +130,9 @@ private fun InputStream.readFully(target: ByteArray) {
     }
 }
 
-/** Implement with a bundled libopus JNI bridge before enabling production playback. */
+/** Decodes a recorder raw-Opus file to 16-bit PCM WAV at [RawOpusFrames.SAMPLE_RATE]. */
 interface RawOpusDecoder {
     fun decodeToWav(source: File, destination: File): File
 }
 
-class MissingOpusDecoderException : IllegalStateException(
-    "Raw Opus decoding requires the production libopus JNI implementation."
-)
+internal data class OpusFrame(val payload: ByteArray, val nextOffset: Long)

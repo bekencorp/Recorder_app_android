@@ -1,26 +1,35 @@
+# Gradle files
 .gradle/
 build/
+.kotlin/
+
+# Local configuration file (sdk path, etc)
 local.properties
-**/build/
-.idea/
+
+# Log/OS Files
+*.log
+
+# Android Studio generated files and folders
+captures/
+.externalNativeBuild/
+.cxx/
+*.aab
+*.apk
+output-metadata.json
+
+# IntelliJ
 *.iml
+.idea/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
 
-# Client repository: retain Android application code only.
-# Cloud deployment, internal handoff material, fixtures, and local build
-# properties stay on the maintainer's machine and must never be committed.
-/backend/
-/docs/
-/test-fixtures/
-/.tmp-video-frames/
-*.md
-gradle.properties
-
-# Secrets and local deployment configuration.
-.env
-.env.*
-*.pem
-*.p12
+# Keystore files
 *.jks
 *.keystore
-service-account*.json
-credentials*.json
+
+# Google Services (e.g. APIs or Firebase)
+google-services.json
+
+# Android Profiling
+*.hprof

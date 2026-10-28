@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
@@ -71,6 +74,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,7 +84,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -103,7 +107,9 @@ import com.airecorder.mvp.core.ble.LivePreviewState
 import com.airecorder.mvp.core.ble.PublicBlePreviewExporter
 import com.airecorder.mvp.core.ble.RecorderBleProtocol
 import com.airecorder.mvp.core.ble.isActive
+import com.airecorder.mvp.core.audio.ConcentusRawOpusDecoder
 import com.airecorder.mvp.core.audio.PhoneTestRecorder
+import com.airecorder.mvp.core.database.AudioFormat
 import com.airecorder.mvp.core.database.ProcessingState
 import com.airecorder.mvp.core.database.DeviceEntity
 import com.airecorder.mvp.core.database.RecordingDetail
@@ -120,10 +126,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
@@ -1222,9 +1231,11 @@ private fun DetailScreen(viewModel: MainViewModel, nav: NavHostController, recor
         val currentRecording = recording ?: return@Scaffold
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
-                Text("Audio playback is enabled after the libopus bridge is packaged for this build.", style = MaterialTheme.typography.bodySmall)
-                if (currentRecording.localCacheState == com.airecorder.mvp.core.database.LocalCacheState.EVICTED) {
-                    Text("Audio was removed from the local cache. The transcript remains available.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                val audioFile = currentRecording.rawAudioPath?.let(::File)?.takeIf(File::isFile)
+                if (audioFile == null) {
+                    Text("Audio was removed from the local cache. The transcript remains available.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    RecordingAudioPlayer(currentRecording, audioFile)
                 }
                 if (currentRecording.processingState == ProcessingState.FAILED) Button(onClick = { viewModel.retry(currentRecording.id) }, modifier = Modifier.padding(top = 8.dp)) { Text("Retry processing") }
             }
@@ -1266,6 +1277,88 @@ private fun DetailScreen(viewModel: MainViewModel, nav: NavHostController, recor
             onDismiss = { showDeleteDialog = false }
         )
     }
+}
+
+@Composable
+private fun RecordingAudioPlayer(recording: RecordingEntity, audioFile: File) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var player by remember(recording.id) { mutableStateOf<MediaPlayer?>(null) }
+    var playing by remember(recording.id) { mutableStateOf(false) }
+    var preparing by remember(recording.id) { mutableStateOf(false) }
+    var error by remember(recording.id) { mutableStateOf<String?>(null) }
+
+    DisposableEffect(recording.id) {
+        onDispose {
+            player?.release()
+            player = null
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            enabled = !preparing,
+            onClick = {
+                val active = player
+                when {
+                    active != null && playing -> {
+                        active.pause()
+                        playing = false
+                    }
+                    active != null -> {
+                        if (active.currentPosition >= (active.duration - 200).coerceAtLeast(0)) active.seekTo(0)
+                        active.start()
+                        playing = true
+                    }
+                    else -> {
+                        preparing = true
+                        error = null
+                        scope.launch {
+                            val mediaPlayer = try {
+                                val playable = withContext(Dispatchers.IO) {
+                                    playableAudio(recording, audioFile, context.cacheDir)
+                                }
+                                MediaPlayer().apply {
+                                    setDataSource(playable.absolutePath)
+                                    setOnCompletionListener { playing = false }
+                                    prepare()
+                                }
+                            } catch (failure: Exception) {
+                                if (failure is CancellationException) throw failure
+                                preparing = false
+                                error = failure.message ?: "Couldn't play this recording"
+                                return@launch
+                            }
+                            if (!isActive) {
+                                mediaPlayer.release()
+                                return@launch
+                            }
+                            player = mediaPlayer
+                            mediaPlayer.start()
+                            playing = true
+                            preparing = false
+                        }
+                    }
+                }
+            }
+        ) {
+            Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = null)
+            Text(when {
+                preparing -> "Preparing audio"
+                playing -> "Pause"
+                else -> "Play"
+            }, modifier = Modifier.padding(start = 8.dp))
+        }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+private fun playableAudio(recording: RecordingEntity, source: File, cacheDir: File): File {
+    if (recording.audioFormat == AudioFormat.OGG_OPUS) return source
+    val decoded = File(cacheDir, "playback/${recording.id}-${source.length()}-${source.lastModified()}.wav")
+    if (decoded.isFile && decoded.length() > 44) return decoded
+    decoded.parentFile?.mkdirs()
+    return ConcentusRawOpusDecoder().decodeToWav(source, decoded)
 }
 
 private fun BleConnectionState.label(): String = when (this) {
