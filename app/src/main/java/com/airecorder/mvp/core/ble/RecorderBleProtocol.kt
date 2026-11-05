@@ -18,16 +18,6 @@ object RecorderBleProtocol {
     const val LIVE_OPUS_MIN_PAYLOAD_BYTES = 20
     const val LIVE_OPUS_MAX_PAYLOAD_BYTES = 80
 
-    // Phase-one firmware uses these values when it switches from BLE to the recorder AP.
-    // They allow Android to continue if firmware disconnects BLE before A101 returns the TLV.
-    val phaseOneWifiFallbackCredentials = WifiCredentials(
-        ssid = "recoder",
-        wifiPassword = "12345678",
-        ftpUser = "recorder",
-        ftpPassword = "12345678",
-        host = "192.168.4.1"
-    )
-
     enum class Command(val value: Int) {
         START_RECORD(0x01), STOP_RECORD(0x02), START_BLE_STREAM(0x05),
         STOP_BLE_STREAM(0x06), GET_STATUS(0x07), SET_SCENE(0x08),
@@ -115,8 +105,13 @@ object RecorderBleProtocol {
         val wifiPassword = readUtf8()
         val ftpUser = readUtf8()
         val ftpPassword = readUtf8()
+        require(ssid.isNotBlank()) { "WiFi SSID is missing from the BLE credential TLV" }
+        require(wifiPassword.isNotBlank()) { "WiFi password is missing from the BLE credential TLV" }
+        require(ftpUser.isNotBlank()) { "FTP user is missing from the BLE credential TLV" }
+        require(ftpPassword.isNotBlank()) { "FTP password is missing from the BLE credential TLV" }
         require(offset + 4 == bytes.size) { "WiFi credential TLV has an invalid IPv4 tail" }
         val ip = bytes.copyOfRange(offset, offset + 4).joinToString(".") { (it.toInt() and 0xFF).toString() }
+        require(ip != "0.0.0.0") { "WiFi host is missing from the BLE credential TLV" }
         // The credential TLV has no port field. Phase-one FTP always uses TCP 21.
         return WifiCredentials(ssid, wifiPassword, ftpUser, ftpPassword, ip, DEFAULT_FTP_PORT)
     }
