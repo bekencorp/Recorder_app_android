@@ -211,9 +211,12 @@ class AndroidRecorderBleClient(context: Context) : RecorderBleClient {
         return try {
             val response = send(RecorderBleProtocol.Command.START_WIFI_AP)
             RecorderBleProtocol.parseWifiCredentials(response.payload)
-        } catch (_: WifiHandoffDisconnectedException) {
-            Log.w(TAG, "Recorder disconnected after START_WIFI_AP; using phase-one WiFi defaults")
-            RecorderBleProtocol.phaseOneWifiFallbackCredentials
+        } catch (error: WifiHandoffDisconnectedException) {
+            Log.e(TAG, "START_WIFI_AP ended before the recorder returned credentials", error)
+            throw IllegalStateException(
+                "SYNC-BLE-WIFI-CREDENTIALS-016 | Recorder did not return Wi-Fi or FTP credentials",
+                error
+            )
         } catch (error: TimeoutCancellationException) {
             Log.e(TAG, "START_WIFI_AP timed out without a response or recorder disconnect", error)
             throw IllegalStateException(
@@ -552,7 +555,7 @@ class AndroidRecorderBleClient(context: Context) : RecorderBleClient {
         val waiter = pending[sequence]
             ?.takeIf { it.command == RecorderBleProtocol.Command.START_WIFI_AP }
             ?: return false
-        Log.i(TAG, "Recorder disconnected during WiFi handoff; continuing with protocol defaults")
+        Log.e(TAG, "Recorder disconnected during WiFi handoff before credentials arrived")
         return waiter.response.completeExceptionally(WifiHandoffDisconnectedException())
     }
 

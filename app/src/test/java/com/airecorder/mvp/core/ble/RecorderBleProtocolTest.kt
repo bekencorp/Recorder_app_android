@@ -22,22 +22,35 @@ class RecorderBleProtocolTest {
         assertArrayEquals(status, notification.body)
     }
 
-    @Test fun parsesWifiCredentialTlvAfterResponsePrefix() {
+    @Test fun parsesWifiCredentialTlvFromNegotiatedPayload() {
         fun field(value: String) = byteArrayOf(value.length.toByte()) + value.toByteArray()
-        val payload = field("recoder") + field("12345678") + field("recorder") + field("12345678") + byteArrayOf(192.toByte(), 168.toByte(), 4, 1)
+        val payload = field("recorder-ap") +
+            field("wifi-from-ble") +
+            field("ftp-from-ble") +
+            field("ftp-secret-from-ble") +
+            byteArrayOf(192.toByte(), 168.toByte(), 4, 1)
         val parsed = RecorderBleProtocol.parseWifiCredentials(payload)
-        assertEquals("recoder", parsed.ssid)
+        assertEquals("recorder-ap", parsed.ssid)
+        assertEquals("wifi-from-ble", parsed.wifiPassword)
+        assertEquals("ftp-from-ble", parsed.ftpUser)
+        assertEquals("ftp-secret-from-ble", parsed.ftpPassword)
         assertEquals("192.168.4.1", parsed.host)
+        assertEquals(21, parsed.port)
     }
 
-    @Test fun phaseOneWifiFallbackMatchesProtocolDefaults() {
-        val credentials = RecorderBleProtocol.phaseOneWifiFallbackCredentials
-        assertEquals("recoder", credentials.ssid)
-        assertEquals("12345678", credentials.wifiPassword)
-        assertEquals("recorder", credentials.ftpUser)
-        assertEquals("12345678", credentials.ftpPassword)
-        assertEquals("192.168.4.1", credentials.host)
-        assertEquals(21, credentials.port)
+    @Test fun rejectsWifiCredentialsWhenPasswordIsMissing() {
+        fun field(value: String) = byteArrayOf(value.length.toByte()) + value.toByteArray()
+        val payload = field("recorder-ap") +
+            field("") +
+            field("ftp-from-ble") +
+            field("ftp-secret-from-ble") +
+            byteArrayOf(192.toByte(), 168.toByte(), 4, 1)
+        try {
+            RecorderBleProtocol.parseWifiCredentials(payload)
+            throw AssertionError("Expected missing WiFi password to fail")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("WiFi password is missing from the BLE credential TLV", error.message)
+        }
     }
 
     @Test fun parsesOneLengthPrefixedLiveOpusFrame() {
